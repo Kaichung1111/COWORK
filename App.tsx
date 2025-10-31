@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Task, ViewMode, Warning, TaskGroup, Project } from './types';
+import { Task, ViewMode, Warning, TaskGroup, Project, ExecutingUnit } from './types';
 import { parseMppFile } from './services/mppParser';
 import { parseMdFiles } from './services/mdParser';
 import Header from './components/Header';
@@ -11,6 +11,8 @@ import GroupRelationshipView from './components/GroupRelationshipView';
 import ProjectListView from './components/ProjectListView';
 import ProjectFormModal from './components/ProjectFormModal';
 import ConfirmationModal from './components/ConfirmationModal';
+import ExecutingUnitModal from './components/ExecutingUnitModal';
+import BatchTaskToolbar from './components/BatchTaskToolbar';
 // FIX: The 'startOfDay' function was not found in the main 'date-fns' export.
 // It is now imported directly from its submodule to ensure it is resolved correctly.
 import { addDays, differenceInBusinessDays, differenceInDays } from 'date-fns';
@@ -32,6 +34,7 @@ const reviveDates = (project: any): Project => ({
     end: new Date(task.end),
   })),
   taskGroups: project.taskGroups || [], // Ensure taskGroups exists
+  executingUnits: project.executingUnits || [], // Ensure executingUnits exists for backward compatibility
 });
 
 
@@ -47,7 +50,9 @@ const App: React.FC = () => {
   
   const [isTaskFormOpen, setIsTaskFormOpen] = useState(false);
   const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
+  const [isExecutingUnitModalOpen, setIsExecutingUnitModalOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
+  const [newTaskDefaultDates, setNewTaskDefaultDates] = useState<{ start: Date; end: Date } | null>(null);
   const [notification, setNotification] = useState<NotificationState | null>(null);
   
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -81,7 +86,8 @@ const App: React.FC = () => {
                 { id: 9, name: '使用者驗收測試 (UAT)', start: addDays(today, 36), end: addDays(today, 39), progress: 0, predecessorId: 8 },
                 { id: 10, name: '部署上線', start: addDays(today, 40), end: addDays(today, 40), progress: 0, predecessorId: 9 },
             ],
-            taskGroups: []
+            taskGroups: [],
+            executingUnits: [],
         };
         setProjects([sampleProject]);
       }
@@ -364,8 +370,13 @@ const App: React.FC = () => {
     });
   }, [currentProject]);
 
-  const openTaskFormForCreate = () => { setTaskToEdit(null); setIsTaskFormOpen(true); };
-  const openTaskFormForEdit = (task: Task) => { setTaskToEdit(task); setIsTaskFormOpen(true); };
+  const openTaskFormForCreate = () => { setTaskToEdit(null); setNewTaskDefaultDates(null); setIsTaskFormOpen(true); };
+  const openTaskFormForEdit = (task: Task) => { setTaskToEdit(task); setNewTaskDefaultDates(null); setIsTaskFormOpen(true); };
+  const openTaskFormWithDates = (start: Date, end: Date) => {
+    setTaskToEdit(null);
+    setNewTaskDefaultDates({ start, end });
+    setIsTaskFormOpen(true);
+  }
   
   const handleUpdateGroup = useCallback((groupId: string, updates: Partial<Pick<TaskGroup, 'name' | 'taskIds'>>) => {
       updateCurrentProject(proj => ({
@@ -467,6 +478,7 @@ const App: React.FC = () => {
           endDate,
           tasks: [],
           taskGroups: [],
+          executingUnits: [],
       };
       setProjects(prev => [...prev, newProject]);
       setIsProjectFormOpen(false);
@@ -493,9 +505,49 @@ const App: React.FC = () => {
       }
   };
 
+  // Executing Unit Handlers
+  const handleSaveExecutingUnits = (newUnits: ExecutingUnit[]) => {
+      if (!currentProject) return;
+      // Check for deleted units and unassign tasks
+      const deletedUnitIds = new Set(
+          currentProject.executingUnits
+              .filter(oldUnit => !newUnits.some(newUnit => newUnit.id === oldUnit.id))
+              .map(unit => unit.id)
+      );
+
+      if (deletedUnitIds.size > 0) {
+          updateCurrentProject(proj => ({
+              executingUnits: newUnits,
+              tasks: proj.tasks.map(task => 
+                  deletedUnitIds.has(task.unitId || '') ? { ...task, unitId: undefined } : task
+              )
+          }));
+      } else {
+          updateCurrentProject(() => ({ executingUnits: newUnits }));
+      }
+      setIsExecutingUnitModalOpen(false);
+      showNotification('執行單位已更新', 'success');
+  };
+
+  const handleBatchAssignUnit = (unitId: string | null) => {
+      if (!currentProject || selectedTaskIds.length === 0) return;
+      updateCurrentProject(proj => ({
+          tasks: proj.tasks.map(task =>
+              selectedTaskIds.includes(task.id)
+                  ? { ...task, unitId: unitId === null ? undefined : unitId }
+                  : task
+          )
+      }));
+      const unit = currentProject.executingUnits.find(u => u.id === unitId);
+      const message = unitId === null ? '已取消指派' : `已指派給 "${unit?.name}"`;
+      showNotification(`${selectedTaskIds.length} 個任務 ${message}`, 'success');
+      setSelectedTaskIds([]);
+  };
+
+
   const renderWorkspace = () => {
     if (!currentProject) return null;
-    const { tasks, taskGroups } = currentProject;
+    const { tasks, taskGroups, executingUnits } = currentProject;
 
     if (isLoading) {
       return (
@@ -515,9 +567,9 @@ const App: React.FC = () => {
     }
     switch (viewMode) {
       case ViewMode.Gantt:
-        return <GanttChartView tasks={tasks} warnings={warnings} onDragTask={handleDragTask} taskGroups={taskGroups} onEditTask={openTaskFormForEdit} onResizeTask={handleResizeTask} onDeleteTask={handleDeleteTask}/>;
+        return <GanttChartView tasks={tasks} warnings={warnings} onDragTask={handleDragTask} taskGroups={taskGroups} onEditTask={openTaskFormForEdit} onResizeTask={handleResizeTask} onDeleteTask={handleDeleteTask} executingUnits={executingUnits}/>;
       case ViewMode.Calendar:
-        return <CalendarView tasks={tasks} warnings={warnings} onDragTask={handleDragTask} selectedTaskIds={selectedTaskIds} onSelectTask={handleSelectTask} onCreateGroup={handleCreateGroup} onOpenAddTaskModal={openTaskFormForCreate} onUngroupTask={handleUngroupTask} taskGroups={taskGroups} onEditTask={openTaskFormForEdit} onResizeTask={handleResizeTask} onDeleteTask={handleDeleteTask}/>;
+        return <CalendarView tasks={tasks} warnings={warnings} onDragTask={handleDragTask} selectedTaskIds={selectedTaskIds} onSelectTask={handleSelectTask} onCreateGroup={handleCreateGroup} onOpenAddTaskModal={openTaskFormForCreate} onOpenAddTaskForRange={openTaskFormWithDates} onUngroupTask={handleUngroupTask} taskGroups={taskGroups} onEditTask={openTaskFormForEdit} onResizeTask={handleResizeTask} onDeleteTask={handleDeleteTask} executingUnits={executingUnits}/>;
       case ViewMode.Group:
         return <GroupRelationshipView 
                     tasks={tasks} 
@@ -534,6 +586,11 @@ const App: React.FC = () => {
   };
 
   const taskNameForModal = currentProject?.tasks.find(t => t.id === taskToDeleteId)?.name;
+  const handleCloseTaskForm = () => {
+    setIsTaskFormOpen(false);
+    setTaskToEdit(null);
+    setNewTaskDefaultDates(null);
+  }
 
   return (
     <div className="min-h-screen font-sans text-slate-800">
@@ -546,6 +603,7 @@ const App: React.FC = () => {
         onSetViewMode={setViewMode}
         onBackToProjects={handleBackToProjects}
         onAddTask={openTaskFormForCreate}
+        onOpenExecutingUnitModal={() => setIsExecutingUnitModalOpen(true)}
       />
       <main className="p-4 sm:p-6 lg:p-8">
         {currentProjectId ? (
@@ -570,9 +628,10 @@ const App: React.FC = () => {
         )}
         <TaskFormModal 
             isOpen={isTaskFormOpen}
-            onClose={() => setIsTaskFormOpen(false)}
+            onClose={handleCloseTaskForm}
             onSave={handleSaveTask}
             taskToEdit={taskToEdit}
+            defaultDates={newTaskDefaultDates}
         />
         <ProjectFormModal
             isOpen={isProjectFormOpen}
@@ -595,6 +654,21 @@ const App: React.FC = () => {
                 </>
             }
         />
+        {currentProject && (
+          <ExecutingUnitModal
+            isOpen={isExecutingUnitModalOpen}
+            onClose={() => setIsExecutingUnitModalOpen(false)}
+            units={currentProject.executingUnits}
+            onSave={handleSaveExecutingUnits}
+          />
+        )}
+        {currentProject && (
+          <BatchTaskToolbar
+            selectedTaskCount={selectedTaskIds.length}
+            units={currentProject.executingUnits}
+            onAssign={handleBatchAssignUnit}
+          />
+        )}
     </div>
   );
 };

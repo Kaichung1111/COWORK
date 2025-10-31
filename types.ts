@@ -1,3 +1,9 @@
+export interface ExecutingUnit {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -5,6 +11,7 @@ export interface Project {
   endDate: Date;
   tasks: Task[];
   taskGroups: TaskGroup[];
+  executingUnits: ExecutingUnit[];
 }
 
 export interface Task {
@@ -15,6 +22,7 @@ export interface Task {
   progress: number;
   predecessorId?: number;
   groupId?: string;
+  unitId?: string;
 }
 
 export enum ViewMode {

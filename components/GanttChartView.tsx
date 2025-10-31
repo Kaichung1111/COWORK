@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import { Task, Warning, TaskGroup } from '../types';
+import { Task, Warning, TaskGroup, ExecutingUnit } from '../types';
 // FIX: The 'startOfDay' function was not found in the main 'date-fns' export.
 // It is now imported directly from its submodule to ensure it is resolved correctly.
 import { format, differenceInDays, addDays } from 'date-fns';
@@ -18,11 +18,14 @@ interface GanttTaskBarProps {
   onDragStart: (e: React.MouseEvent<HTMLDivElement>, taskId: number) => void;
   onDoubleClick: (task: Task) => void;
   groupColor?: string;
+  unitColor?: string;
   onDelete: (taskId: number) => void;
   onResizeStart: (e: React.MouseEvent<HTMLDivElement>, taskId: number, edge: 'start' | 'end') => void;
 }
 
-const GanttTaskBar: React.FC<GanttTaskBarProps> = ({ task, isWarning, left, width, top, onDragStart, onDoubleClick, groupColor, onDelete, onResizeStart }) => {
+const GanttTaskBar: React.FC<GanttTaskBarProps> = ({ task, isWarning, left, width, top, onDragStart, onDoubleClick, groupColor, unitColor, onDelete, onResizeStart }) => {
+  const bgColor = isWarning ? '#ef4444' : (unitColor || '#3b82f6');
+  
   return (
     <div
       onMouseDown={(e) => onDragStart(e, task.id)}
@@ -31,13 +34,14 @@ const GanttTaskBar: React.FC<GanttTaskBarProps> = ({ task, isWarning, left, widt
       style={{ left: `${left}px`, width: `${width}px`, top: `${top}px` }}
     >
       <div
-        className={`w-full h-full rounded-md flex items-center justify-between text-white ${
-          isWarning ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'
-        }`}
-        style={{ borderLeft: groupColor ? `5px solid ${groupColor}` : 'none' }}
+        className={`w-full h-full rounded-md flex items-center justify-between text-white`}
+        style={{
+          backgroundColor: bgColor,
+          borderLeft: groupColor ? `5px solid ${groupColor}` : 'none'
+        }}
       >
         <div
-          className="absolute top-0 left-0 h-full bg-blue-400 rounded-l-md"
+          className="absolute top-0 left-0 h-full bg-black bg-opacity-20 rounded-l-md"
           style={{ width: `${task.progress}%`, marginLeft: groupColor ? '5px' : '0' }}
         ></div>
          <div 
@@ -55,7 +59,7 @@ const GanttTaskBar: React.FC<GanttTaskBarProps> = ({ task, isWarning, left, widt
             className="relative w-5 h-5 mr-1 bg-black bg-opacity-20 rounded-full text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-opacity-50 transition-opacity flex-shrink-0 z-20"
             title="刪除任務"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
         </button>
         <div 
           onMouseDown={(e) => onResizeStart(e, task.id, 'end')}
@@ -72,10 +76,11 @@ const GanttChartView: React.FC<{
   warnings: Warning[];
   onDragTask: (taskId: number, newStartDate: Date) => void;
   taskGroups: TaskGroup[];
+  executingUnits: ExecutingUnit[];
   onEditTask: (task: Task) => void;
   onResizeTask: (taskId: number, newDates: { start: Date; end: Date }) => void;
   onDeleteTask: (taskId: number) => void;
-}> = ({ tasks, warnings, onDragTask, taskGroups, onEditTask, onResizeTask, onDeleteTask }) => {
+}> = ({ tasks, warnings, onDragTask, taskGroups, executingUnits, onEditTask, onResizeTask, onDeleteTask }) => {
   const [timelineWidth, setTimelineWidth] = useState(2000);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [dragInfo, setDragInfo] = useState<{ type: 'move' | 'resize', taskId: number, startX: number, initialTask: Task, edge?: 'start' | 'end' } | null>(null);
@@ -163,6 +168,12 @@ const GanttChartView: React.FC<{
     taskGroups.forEach(group => map.set(group.id, group));
     return map;
   }, [taskGroups]);
+  
+  const unitMap = useMemo(() => {
+    const map = new Map<string, ExecutingUnit>();
+    executingUnits.forEach(unit => map.set(unit.id, unit));
+    return map;
+  }, [executingUnits]);
 
   return (
     <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -242,6 +253,7 @@ const GanttChartView: React.FC<{
               const width = (differenceInDays(task.end, task.start) + 1) * DAY_WIDTH - 4; // a bit of padding
               const isWarning = warnings.some(w => w.taskId === task.id);
               const group = task.groupId ? taskGroupMap.get(task.groupId) : undefined;
+              const unit = task.unitId ? unitMap.get(task.unitId) : undefined;
 
               return (
                 <GanttTaskBar
@@ -254,6 +266,7 @@ const GanttChartView: React.FC<{
                   onDragStart={(e, taskId) => handleMouseDown(e, taskId, 'move')}
                   onDoubleClick={onEditTask}
                   groupColor={group?.color}
+                  unitColor={unit?.color}
                   onDelete={onDeleteTask}
                   onResizeStart={(e, taskId, edge) => handleMouseDown(e, taskId, 'resize', edge)}
                 />

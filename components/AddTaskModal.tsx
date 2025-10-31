@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Task } from '../types';
+import { format } from 'date-fns';
 
 interface TaskFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (taskData: { id?: number; name: string; start: Date; end: Date }) => void;
   taskToEdit?: Task | null;
+  defaultDates?: { start: Date; end: Date } | null;
 }
 
-const TaskFormModal: React.FC<TaskFormModalProps> = ({ isOpen, onClose, onSave, taskToEdit }) => {
+const TaskFormModal: React.FC<TaskFormModalProps> = ({ isOpen, onClose, onSave, taskToEdit, defaultDates }) => {
   const [name, setName] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -18,25 +20,31 @@ const TaskFormModal: React.FC<TaskFormModalProps> = ({ isOpen, onClose, onSave, 
     if (isOpen) {
       if (taskToEdit) {
         setName(taskToEdit.name);
-        setStartDate(taskToEdit.start.toISOString().split('T')[0]);
-        setEndDate(taskToEdit.end.toISOString().split('T')[0]);
-      } else {
-        const today = new Date().toISOString().split('T')[0];
+        setStartDate(format(taskToEdit.start, 'yyyy-MM-dd'));
+        setEndDate(format(taskToEdit.end, 'yyyy-MM-dd'));
+      } else if (defaultDates) {
         setName('');
-        setStartDate(today);
-        setEndDate(today);
+        setStartDate(format(defaultDates.start, 'yyyy-MM-dd'));
+        setEndDate(format(defaultDates.end, 'yyyy-MM-dd'));
+      } else {
+        const today = new Date();
+        setName('');
+        setStartDate(format(today, 'yyyy-MM-dd'));
+        setEndDate(format(today, 'yyyy-MM-dd'));
       }
       setError('');
     }
-  }, [isOpen, taskToEdit]);
+  }, [isOpen, taskToEdit, defaultDates]);
 
   const handleSubmit = () => {
     if (!name.trim()) {
       setError('任務名稱不可為空。');
       return;
     }
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // FIX: Ensure date strings are parsed as local time, not UTC.
+    // Appending T00:00:00 makes the browser interpret the date in the local timezone.
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
     if (end < start) {
       setError('結束日期不可早於開始日期。');
       return;
@@ -65,6 +73,7 @@ const TaskFormModal: React.FC<TaskFormModalProps> = ({ isOpen, onClose, onSave, 
               onChange={(e) => setName(e.target.value)}
               className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
               placeholder="例如：完成初步設計"
+              autoFocus
             />
           </div>
           <div className="grid grid-cols-2 gap-4">

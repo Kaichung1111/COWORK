@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Task, Warning, TaskGroup } from '../types';
+import { Task, Warning, TaskGroup, ExecutingUnit } from '../types';
 import {
   format,
   endOfMonth,
@@ -12,6 +12,7 @@ import {
   isAfter,
   differenceInDays,
   addDays,
+  isWithinInterval,
 } from 'date-fns';
 import startOfMonth from 'date-fns/startOfMonth';
 import startOfWeek from 'date-fns/startOfWeek';
@@ -29,26 +30,37 @@ interface CalendarViewProps {
   onSelectTask: (taskId: number, isCtrlOrMetaKey: boolean) => void;
   onCreateGroup: () => void;
   onOpenAddTaskModal: () => void;
+  onOpenAddTaskForRange: (start: Date, end: Date) => void;
   onUngroupTask: (taskId: number) => void;
   taskGroups: TaskGroup[];
+  executingUnits: ExecutingUnit[];
   onEditTask: (task: Task) => void;
   onResizeTask: (taskId: number, newDates: { start: Date; end: Date }) => void;
   onDeleteTask: (taskId: number) => void;
 }
 
-interface MonthViewProps extends Omit<CalendarViewProps, 'tasks'> {
+interface MonthViewProps extends Omit<CalendarViewProps, 'tasks' | 'onOpenAddTaskForRange'> {
   month: Date;
   allTasks: Task[];
+  selectionRange: { start: Date | null; end: Date | null };
+  onDayMouseDown: (day: Date) => void;
+  onDayMouseEnter: (day: Date) => void;
+  onDayMouseUp: (day: Date) => void;
   setResizeInfo: React.Dispatch<React.SetStateAction<{ taskId: number; edge: 'start' | 'end'; initialTask: Task; } | null>>;
   resizeInfo: { taskId: number; edge: 'start' | 'end'; initialTask: Task; } | null;
 }
 
-const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDragTask, selectedTaskIds, onSelectTask, onUngroupTask, taskGroups, onEditTask, onResizeTask, onDeleteTask, setResizeInfo, resizeInfo }) => {
+const MonthView: React.FC<MonthViewProps> = ({ 
+    month, allTasks, warnings, onDragTask, selectedTaskIds, onSelectTask, 
+    onUngroupTask, taskGroups, executingUnits, onEditTask, onDeleteTask, setResizeInfo, resizeInfo,
+    selectionRange, onDayMouseDown, onDayMouseEnter, onDayMouseUp
+}) => {
     const daysInGrid = useMemo(() => {
         const firstDayOfMonth = startOfMonth(month);
         const lastDayOfMonth = endOfMonth(month);
-        const firstDayOfGrid = startOfWeek(firstDayOfMonth, { locale: zhTW });
-        const lastDayOfGrid = endOfWeek(lastDayOfMonth, { locale: zhTW });
+        const weekOptions = { locale: zhTW, weekStartsOn: 0 } as const;
+        const firstDayOfGrid = startOfWeek(firstDayOfMonth, weekOptions);
+        const lastDayOfGrid = endOfWeek(lastDayOfMonth, weekOptions);
         return eachDayOfInterval({ start: firstDayOfGrid, end: lastDayOfGrid });
     }, [month]);
 
@@ -72,6 +84,12 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
         return map;
     }, [taskGroups]);
     
+    const unitMap = useMemo(() => {
+      const map = new Map<string, ExecutingUnit>();
+      executingUnits.forEach(unit => map.set(unit.id, unit));
+      return map;
+    }, [executingUnits]);
+
     const weeklyLayouts = useMemo(() => {
         return weeks.map(week => {
             const weekStart = startOfDay(week[0]);
@@ -131,6 +149,11 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
             setResizeInfo({ taskId, edge, initialTask: {...task}});
         }
     }, [allTasks, setResizeInfo]);
+    
+    const LANE_SPACING = 32; // Total vertical space for each task lane
+    const TASK_BAR_MIN_HEIGHT = 28; // Min height of the task bar itself
+    const DATE_HEADER_HEIGHT = 32; // Space for the date number header in each cell
+    const MIN_WEEK_HEIGHT = 96; // Minimum height for a week row for better aesthetics
 
     return (
         <div className="mb-8">
@@ -144,23 +167,35 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
                 </div>
                 ))}
             </div>
-            <div className="calendar-grid-body relative">
+            <div className="calendar-grid-body relative cursor-crosshair">
                 {weeks.map((week, weekIndex) => {
                     const lanes = weeklyLayouts[weekIndex];
-                    const weekHeight = Math.max(24, lanes.length * 28) + 32;
+                    const weekHeight = (lanes.length * LANE_SPACING) + DATE_HEADER_HEIGHT;
+
                     return (
-                        <div key={weekIndex} className="relative grid grid-cols-7" style={{height: `${weekHeight}px`}}>
+                        <div key={weekIndex} className="relative grid grid-cols-7" style={{height: `${Math.max(MIN_WEEK_HEIGHT, weekHeight)}px`}}>
                             {week.map((day) => {
                                 const isCurrentMonth = isSameMonth(day, month);
                                 const isToday = isSameDay(day, new Date());
+                                const { start, end } = selectionRange;
+                                let isSelectedForNewTask = false;
+                                if (start && end) {
+                                    const rangeStart = startOfDay(min([start, end]));
+                                    const rangeEnd = startOfDay(max([start, end]));
+                                    isSelectedForNewTask = isWithinInterval(day, { start: rangeStart, end: rangeEnd });
+                                }
                                 return (
                                     <div
                                         key={format(day, 'yyyy-MM-dd')}
-                                        className={`border-b border-r border-slate-200 p-2 ${isCurrentMonth ? 'bg-white' : 'bg-slate-50'}`}
+                                        className={`relative border-b border-r border-slate-200 p-2 ${isCurrentMonth ? 'bg-white' : 'bg-slate-50'}`}
                                         onDrop={(e) => handleDrop(e, day)}
                                         onDragOver={handleDragOver}
+                                        onMouseDown={() => onDayMouseDown(day)}
+                                        onMouseEnter={() => onDayMouseEnter(day)}
+                                        onMouseUp={() => onDayMouseUp(day)}
                                         data-date={day.toISOString()}
                                     >
+                                    {isSelectedForNewTask && <div className="absolute inset-0 bg-blue-200 bg-opacity-50 z-0"></div>}
                                     <span className={`relative z-10 font-semibold ${isToday ? 'bg-blue-500 text-white rounded-full w-7 h-7 flex items-center justify-center' : 'text-slate-600'} ${!isCurrentMonth ? 'text-slate-400' : ''}`}>
                                         {format(day, 'd')}
                                     </span>
@@ -172,6 +207,8 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
                                     const isWarning = warnings.some(w => w.taskId === task.id);
                                     const isSelected = selectedTaskIds.includes(task.id);
                                     const group = task.groupId ? taskGroupMap.get(task.groupId) : undefined;
+                                    const unit = task.unitId ? unitMap.get(task.unitId) : undefined;
+                                    const bgColor = isWarning ? '#ef4444' : (unit?.color || '#3b82f6');
                                     const isResizing = resizeInfo?.taskId === task.id;
                                     return(
                                         <div key={task.id}
@@ -179,13 +216,14 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
                                             onDragStart={(e) => handleDragStart(e, task.id)}
                                             onClick={(e) => { e.stopPropagation(); onSelectTask(task.id, e.ctrlKey || e.metaKey)}}
                                             onDoubleClick={() => onEditTask(task)}
-                                            className={`group absolute text-xs py-0.5 px-2 rounded-md text-white cursor-grab transition-all duration-200 flex items-center ${isWarning ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'} ${isSelected ? 'ring-2 ring-offset-1 ring-yellow-400' : ''}`}
+                                            className={`group absolute text-xs py-0.5 px-2 rounded-md text-white cursor-grab transition-all duration-200 flex items-center ${isSelected ? 'ring-2 ring-offset-1 ring-yellow-400' : ''}`}
                                             style={{
-                                                top: `${laneIndex * 28 + 28}px`,
+                                                backgroundColor: bgColor,
+                                                top: `${laneIndex * LANE_SPACING + DATE_HEADER_HEIGHT}px`,
                                                 left: `calc(${(100/7) * startCol}% + 2px)`,
                                                 width: `calc(${(100/7) * span}% - 4px)`,
                                                 borderLeft: group ? `5px solid ${group.color}` : 'none',
-                                                minHeight: '24px',
+                                                minHeight: `${TASK_BAR_MIN_HEIGHT}px`,
                                                 zIndex: 5
                                             }}
                                         >
@@ -194,25 +232,25 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
                                             <div onMouseDown={(e) => handleResizeStart(e, task.id, 'start')} className={`absolute left-0 top-0 h-full w-2 cursor-ew-resize z-10 ${isResizing ? 'bg-yellow-400 opacity-50' : ''}`}/>
                                             <div onMouseDown={(e) => handleResizeStart(e, task.id, 'end')} className={`absolute right-0 top-0 h-full w-2 cursor-ew-resize z-10 ${isResizing ? 'bg-yellow-400 opacity-50' : ''}`}/>
                                             
-                                            <div className="absolute top-0.5 right-0.5 flex z-10">
-                                            {group && isSelected && (
+                                            <div className="absolute top-0.5 right-0.5 flex items-center space-x-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {group && (
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); onUngroupTask(task.id); }}
+                                                        onMouseDown={(e) => e.stopPropagation()}
+                                                        className="w-5 h-5 bg-black bg-opacity-20 rounded-full text-white flex items-center justify-center hover:bg-opacity-50 transition-colors"
+                                                        title="解除關聯"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                                                    </button>
+                                                )}
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); onUngroupTask(task.id); }}
+                                                    onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
                                                     onMouseDown={(e) => e.stopPropagation()}
-                                                    className="w-4 h-4 bg-black bg-opacity-20 rounded-full text-white flex items-center justify-center hover:bg-opacity-50 transition-colors"
-                                                    title="解除關聯"
+                                                    className="w-5 h-5 bg-black bg-opacity-20 rounded-full text-white flex items-center justify-center hover:bg-opacity-50 transition-colors"
+                                                    title="刪除任務"
                                                 >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
                                                 </button>
-                                            )}
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
-                                                onMouseDown={(e) => e.stopPropagation()}
-                                                className="w-4 h-4 ml-1 bg-black bg-opacity-20 rounded-full text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-opacity-50 transition-opacity"
-                                                title="刪除任務"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                                            </button>
                                             </div>
                                         </div>
                                     )
@@ -228,10 +266,12 @@ const MonthView: React.FC<MonthViewProps> = ({ month, allTasks, warnings, onDrag
 
 const CalendarView: React.FC<CalendarViewProps> = (props) => {
   const [resizeInfo, setResizeInfo] = useState<{ taskId: number, edge: 'start' | 'end', initialTask: Task } | null>(null);
-  const { tasks, onResizeTask, onCreateGroup, onOpenAddTaskModal, selectedTaskIds } = props;
+  const { tasks, onResizeTask, onCreateGroup, onOpenAddTaskModal, onOpenAddTaskForRange, selectedTaskIds } = props;
   
   const monthRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isSelecting = useRef(false);
+  const [selectionRange, setSelectionRange] = useState<{ start: Date | null; end: Date | null }>({ start: null, end: null });
 
   const [viewStartDate] = useState(startOfMonth(subMonths(new Date(), 3)));
   const [viewEndDate] = useState(endOfMonth(addMonths(new Date(), 8))); // Approx 1 year view
@@ -245,6 +285,40 @@ const CalendarView: React.FC<CalendarViewProps> = (props) => {
     }
     return months;
   }, [viewStartDate, viewEndDate]);
+
+  const handleDayMouseDown = useCallback((day: Date) => {
+    isSelecting.current = true;
+    setSelectionRange({ start: day, end: day });
+  }, []);
+
+  const handleDayMouseEnter = useCallback((day: Date) => {
+    if (isSelecting.current) {
+        setSelectionRange(prev => ({ ...prev, end: day }));
+    }
+  }, []);
+
+  const handleDayMouseUp = useCallback((day: Date) => {
+    if (!isSelecting.current) return;
+    isSelecting.current = false;
+    
+    if (selectionRange.start && selectionRange.end) {
+        const finalStart = min([selectionRange.start, selectionRange.end]);
+        const finalEnd = max([selectionRange.start, selectionRange.end]);
+        onOpenAddTaskForRange(finalStart, finalEnd);
+    }
+
+    setSelectionRange({ start: null, end: null });
+  }, [selectionRange, onOpenAddTaskForRange]);
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+        if(isSelecting.current) {
+            handleDayMouseUp(selectionRange.end!);
+        }
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [handleDayMouseUp, selectionRange.end]);
 
   useEffect(() => {
     const todayKey = format(new Date(), 'yyyy-MM');
@@ -331,6 +405,10 @@ const CalendarView: React.FC<CalendarViewProps> = (props) => {
                     {...props}
                     resizeInfo={resizeInfo}
                     setResizeInfo={setResizeInfo}
+                    selectionRange={selectionRange}
+                    onDayMouseDown={handleDayMouseDown}
+                    onDayMouseEnter={handleDayMouseEnter}
+                    onDayMouseUp={handleDayMouseUp}
                 />
             </div>
         ))}

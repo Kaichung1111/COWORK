@@ -28,8 +28,10 @@ const ProjectFormModal: React.FC<ProjectFormModalProps> = ({ isOpen, onClose, on
       setError('專案名稱不可為空。');
       return;
     }
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // FIX: Ensure date strings are parsed as local time, not UTC.
+    // Appending T00:00:00 makes the browser interpret the date in the local timezone.
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
     if (end < start) {
       setError('結束日期不可早於開始日期。');
       return;
